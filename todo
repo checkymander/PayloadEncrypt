@@ -1,0 +1,10 @@
+Possible TTPs to add
+<Duqu 2.0 from Wikileaks Kaspersky Document>
+Multiple Payloads in binary
+Pass in Decryption Key
+Decrypt all payloads until one of them works
+
+
+#Host a decryptor with multiple different payloads using different decryption keys depending on the environment
+#Get the environment variables from the environment in order to decrypt.
+#Go through the payloads in order to determine which ones worked.
